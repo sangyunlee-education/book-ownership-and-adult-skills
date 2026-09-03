@@ -5,6 +5,8 @@
 # Data : PIAAC Cycle 2 Korea public use file (prgkorp2.csv, OECD)
 #        자료는 저장소에 포함하지 않았다. OECD에서 내려받아 이 스크립트와
 #        같은 폴더에 두면 그대로 실행된다.
+#        배포본에 따라 구분자가 세미콜론(;), 쉼표(,), 탭인 경우가 있어
+#        첫 줄에서 자동으로 판별한다.
 #
 # 산출물
 #   표 1. 도서 보유 수 범주별 배경변수의 가중 분포 및 교차분석
@@ -191,23 +193,23 @@ show_note <- function(...) {
 ## (1) svyglm 모형 목록(PV별)의 회귀계수 통합 ---------------------------------
 
 pool_svyglm_models <- function(model_list, df_com, outcome_name = "문해력", n_used) {
-
+  
   coef_names <- Reduce(intersect, lapply(model_list, function(x) names(coef(x))))
   if (length(coef_names) == 0) {
     stop("결합할 공통 회귀계수가 없습니다. 범주 수준 또는 모형식을 확인하세요.")
   }
-
+  
   coef_mat <- do.call(rbind, lapply(model_list, function(x) coef(x)[coef_names]))
   colnames(coef_mat) <- coef_names
-
+  
   vcov_list <- lapply(model_list, function(x) {
     as.matrix(vcov(x))[coef_names, coef_names, drop = FALSE]
   })
-
+  
   k     <- length(model_list)
   q_bar <- colMeans(coef_mat)                 # 결합 점추정치
   u_bar <- Reduce("+", vcov_list) / k         # 표본내 분산
-
+  
   if (k > 1) {
     b_mat <- stats::cov(coef_mat)             # 표본간 분산
     if (is.null(dim(b_mat))) {
@@ -217,21 +219,21 @@ pool_svyglm_models <- function(model_list, df_com, outcome_name = "문해력", n
     b_mat <- matrix(0, length(q_bar), length(q_bar),
                     dimnames = list(coef_names, coef_names))
   }
-
+  
   total_var_mat <- u_bar + (1 + 1 / k) * b_mat
   std_error     <- sqrt(diag(total_var_mat))
-
+  
   b_diag <- diag(b_mat)
   lambda <- pmin(pmax(((1 + 1 / k) * b_diag) / diag(total_var_mat), 0), 0.999999)
-
+  
   df_old    <- (k - 1) / (lambda^2)
   df_obs    <- ((df_com + 1) / (df_com + 3)) * df_com * (1 - lambda)
   df_pooled <- 1 / ((1 / df_old) + (1 / df_obs))
   df_pooled[is.na(df_pooled) | is.infinite(df_pooled)] <- df_com
   df_pooled[b_diag < 1e-12] <- df_com
-
+  
   statistic <- q_bar / std_error
-
+  
   tibble(
     outcome        = outcome_name,
     n              = n_used,
@@ -253,9 +255,9 @@ pool_svyglm_models <- function(model_list, df_com, outcome_name = "문해력", n
 
 pool_scalar_df <- function(df, key_cols, estimate_col, se_col,
                            df_com, outcome_name = "문해력", n_used) {
-
+  
   stopifnot(length(key_cols) >= 1)
-
+  
   df %>%
     rename(.est = !!as.name(estimate_col), .se = !!as.name(se_col)) %>%
     filter(!is.na(.est), !is.na(.se)) %>%
@@ -296,16 +298,44 @@ pool_scalar_df <- function(df, key_cols, estimate_col, se_col,
 # 5. 자료 불러오기 및 전처리
 # ==============================================================================
 
-if (!file.exists(DATA_PATH)) {
-  stop("DATA_PATH에 지정한 파일이 없습니다: ", DATA_PATH)
+## (1) 구분자 자동 판별 후 읽기 -----------------------------------------------
+
+read_piaac <- function(path) {
+  if (!file.exists(path)) {
+    stop("DATA_PATH에 지정한 파일이 없습니다: ", path)
+  }
+  
+  first_line <- readLines(path, n = 1, warn = FALSE)
+  cands      <- c(";", ",", "\t", "|")
+  counts     <- vapply(cands, function(d) {
+    length(gregexpr(d, first_line, fixed = TRUE)[[1]][
+      gregexpr(d, first_line, fixed = TRUE)[[1]] > 0])
+  }, integer(1))
+  
+  if (max(counts) == 0) {
+    stop("구분자를 판별하지 못했습니다. 파일 첫 줄을 확인하세요.")
+  }
+  delim <- cands[which.max(counts)]
+  
+  cat(sprintf("[자료] 구분자 '%s'로 읽습니다.\n",
+              if (delim == "\t") "\\t" else delim))
+  
+  readr::read_delim(
+    path,
+    delim          = delim,
+    show_col_types = FALSE,
+    progress       = FALSE,
+    locale         = readr::locale(encoding = "UTF-8")
+  )
 }
 
-dat_raw <- readr::read_csv(
-  DATA_PATH,
-  show_col_types = FALSE,
-  progress       = FALSE,
-  locale         = readr::locale(encoding = "UTF-8")
-)
+dat_raw <- read_piaac(DATA_PATH)
+
+cat(sprintf("[자료] %s행 %s열\n",
+            format(nrow(dat_raw), big.mark = ","),
+            format(ncol(dat_raw), big.mark = ",")))
+
+## (2) 필요한 변수 확인 -------------------------------------------------------
 
 required_raw_vars <- c(
   pv_lit, main_weight, rep_weights, book_var, age_var,
@@ -319,6 +349,8 @@ if (length(missing_raw_vars) > 0) {
        paste(missing_raw_vars, collapse = ", "))
 }
 
+## (3) 변수 생성 --------------------------------------------------------------
+
 special_numeric_vars <- c(
   book_var, "PAREDC2", "J2_Q04d", "J2_Q05d",
   "J2_Q07_C", "J2_Q0801", "J2_Q0802"
@@ -327,6 +359,8 @@ special_numeric_vars <- c(
 dat <- dat_raw %>%
   mutate(across(where(is.character), recode_char_missing)) %>%
   mutate(across(all_of(special_numeric_vars), recode_numeric_special_missing)) %>%
+  mutate(across(all_of(c(pv_lit, main_weight, rep_weights)),
+                ~ suppressWarnings(as.numeric(.x)))) %>%
   mutate(
     # 14세 시점 가정 내 도서 보유 수(기준범주가 첫 수준)
     book_f = factor(
@@ -341,7 +375,7 @@ dat <- dat_raw %>%
       ),
       levels = book_levels
     ),
-
+    
     # 성별
     gender_f = factor(
       case_when(
@@ -351,7 +385,7 @@ dat <- dat_raw %>%
       ),
       levels = c("남성", "여성")
     ),
-
+    
     # 연령
     age_f = factor(
       case_when(
@@ -370,7 +404,7 @@ dat <- dat_raw %>%
       levels = c("20-24세", "25-29세", "30-34세", "35-39세", "40-44세",
                  "45-49세", "50-54세", "55-59세", "60-64세", "65세 이상")
     ),
-
+    
     # 부모 교육수준(기준범주가 첫 수준)
     parent_edu_f = factor(
       case_when(
@@ -381,7 +415,7 @@ dat <- dat_raw %>%
       ),
       levels = c("중졸 이하", "고졸/전문대졸", "대졸 이상")
     ),
-
+    
     # 14세 당시 모 경제활동
     mother_work_f = factor(
       case_when(
@@ -391,7 +425,7 @@ dat <- dat_raw %>%
       ),
       levels = c("유급직", "무직/가사 등")
     ),
-
+    
     # 14세 당시 부 경제활동
     father_work_f = factor(
       case_when(
@@ -401,7 +435,7 @@ dat <- dat_raw %>%
       ),
       levels = c("유급직", "무직/가사 등")
     ),
-
+    
     # 14세 당시 거주지역 규모
     residence_f = factor(
       case_when(
@@ -413,7 +447,7 @@ dat <- dat_raw %>%
       ),
       levels = c("대도시", "중소도시", "소도시/읍면", "농어촌/시골")
     ),
-
+    
     # 14세 당시 가족구조
     family14_f = factor(
       case_when(
@@ -427,7 +461,7 @@ dat <- dat_raw %>%
     )
   )
 
-## 변수별 결측 점검 -----------------------------------------------------------
+## (4) 변수별 결측 점검 -------------------------------------------------------
 
 missing_by_var <- dat %>%
   select(all_of(c("book_f", control_vars, pv_lit))) %>%
@@ -439,7 +473,7 @@ missing_by_var <- dat %>%
 cat("\n[변수별 결측]\n")
 print(missing_by_var, n = Inf)
 
-## 완전사례 자료 --------------------------------------------------------------
+## (5) 완전사례 자료 ----------------------------------------------------------
 
 cc_data <- dat %>%
   select(all_of(c(pv_lit, "book_f", control_vars, main_weight, rep_weights))) %>%
@@ -456,10 +490,11 @@ cc_des <- make_design(cc_data)
 cc_df  <- survey::degf(cc_des)
 
 cat("\n[표본]\n")
-cat(sprintf("  원자료           : %d명\n", nrow(dat_raw)))
-cat(sprintf("  결측 제외        : %d명(%.2f%%)\n",
-            nrow(dat_raw) - cc_n, 100 * (nrow(dat_raw) - cc_n) / nrow(dat_raw)))
-cat(sprintf("  최종 분석 표본   : %d명\n", cc_n))
+cat(sprintf("  원자료           : %s명\n", format(nrow(dat_raw), big.mark = ",")))
+cat(sprintf("  결측 제외        : %s명(%.2f%%)\n",
+            format(nrow(dat_raw) - cc_n, big.mark = ","),
+            100 * (nrow(dat_raw) - cc_n) / nrow(dat_raw)))
+cat(sprintf("  최종 분석 표본   : %s명\n", format(cc_n, big.mark = ",")))
 cat(sprintf("  복합표본 설계 자유도: %d\n", cc_df))
 
 
@@ -481,7 +516,7 @@ main_pooled <- pool_svyglm_models(main_model_list, df_com = cc_df, n_used = cc_n
 main_effect_results <- main_pooled %>%
   filter(term %in% SENSE_TREAT_TERMS) %>%
   mutate(`도서 보유 수` = factor(str_remove(term, "^book_f"),
-                                 levels = setdiff(book_levels, book_ref))) %>%
+                            levels = setdiff(book_levels, book_ref))) %>%
   arrange(`도서 보유 수`)
 
 ## (3) 문해력의 가중 표준편차(효과크기 환산 기준) -----------------------------
@@ -548,7 +583,7 @@ weighted_col_percent <- function(var, category) {
     mutate(percent = 100 * weighted_n / sum(weighted_n, na.rm = TRUE)) %>%
     ungroup() %>%
     filter(category_tmp == category)
-
+  
   out <- setNames(rep(NA_real_, length(book_levels)), book_levels)
   out[as.character(tmp$book_f)] <- tmp$percent
   out
@@ -556,12 +591,12 @@ weighted_col_percent <- function(var, category) {
 
 make_table1_section <- function(spec) {
   empty <- setNames(rep("", length(book_levels)), book_levels)
-
+  
   header <- make_row(spec$label, empty, fmt_p_with_stars(safe_svy_chisq_p(spec$var)))
   rows   <- map_dfr(spec$levels, function(cat_label) {
     make_row(cat_label, fmt_num(weighted_col_percent(spec$var, cat_label), 1))
   })
-
+  
   bind_rows(header, rows)
 }
 
@@ -572,7 +607,7 @@ book_distribution <- cc_data %>%
   summarise(n = n(), weighted_n = sum(.data[[main_weight]]), .groups = "drop") %>%
   mutate(pct = 100 * weighted_n / sum(weighted_n))
 
-n_vec   <- setNames(format(book_distribution$n, big.mark = "", trim = TRUE),
+n_vec   <- setNames(as.character(book_distribution$n),
                     as.character(book_distribution$book_f))
 pct_vec <- setNames(fmt_num(book_distribution$pct, 1),
                     as.character(book_distribution$book_f))
@@ -686,38 +721,45 @@ show_table(
 )
 
 ## (2) 비교기준 공변량 대비 배수 시나리오(bounds) -----------------------------
+##     편의의 척도 상수 se*sqrt(dof)는 적합의 기하량이므로 가중 lm의 se와 dof를
+##     쌍으로 사용한다. 조정 표준오차만 설계 기반(BRR) 표준오차에 배율을 적용한다.
 
 benchmark_bounds_pv <- function(i, treatment_term) {
-  brr <- coef(summary(main_model_list[[i]]))
-  if (!(treatment_term %in% rownames(brr))) {
+  m       <- lm_model_list[[i]]
+  tab_lm  <- coef(summary(m))
+  tab_brr <- coef(summary(main_model_list[[i]]))
+  
+  if (!(treatment_term %in% rownames(tab_lm))) {
     stop("벤치마크 분석 대상 계수가 모형에 없습니다: ", treatment_term)
   }
-
-  est_brr <- brr[treatment_term, "Estimate"]
-  se_brr  <- brr[treatment_term, "Std. Error"]
-
+  
+  est_lm  <- tab_lm[treatment_term, "Estimate"]
+  se_lm   <- tab_lm[treatment_term, "Std. Error"]
+  dof_lm  <- m$df.residual
+  se_brr  <- tab_brr[treatment_term, "Std. Error"]
+  
   sense_out <- sensemakr::sensemakr(
-    model                = lm_model_list[[i]],
+    model                = m,
     treatment            = treatment_term,
     benchmark_covariates = SENSE_BENCHMARK_COV,
     kd                   = SENSE_KD,
     q                    = 1,
     alpha                = SENSE_ALPHA
   )
-
+  
   bounds <- as_tibble(sense_out$bounds)
   stopifnot(nrow(bounds) == length(SENSE_KD))
-
+  
   bounds %>%
     mutate(
-      treatment         = treatment_term,
-      pv                = pv_lit[i],
-      scenario          = scenario_levels,
-      Adjusted_Estimate = sensemakr::adjusted_estimate(
-        estimate = est_brr, se = se_brr, dof = cc_df,
+      treatment = treatment_term,
+      pv        = pv_lit[i],
+      scenario  = scenario_levels,
+      Adjusted_Estimate = sensemakr::adjusted_estimate(   # 편의: lm 척도
+        estimate = est_lm, se = se_lm, dof = dof_lm,
         r2dz.x = r2dz.x, r2yz.dx = r2yz.dx
       ),
-      Adjusted_SE = sensemakr::adjusted_se(
+      Adjusted_SE = sensemakr::adjusted_se(               # 불확실성: 설계 기반
         se = se_brr, dof = cc_df,
         r2dz.x = r2dz.x, r2yz.dx = r2yz.dx
       )
@@ -725,8 +767,8 @@ benchmark_bounds_pv <- function(i, treatment_term) {
     select(treatment, pv, scenario, r2dz.x, r2yz.dx, Adjusted_Estimate, Adjusted_SE)
 }
 
-sensitivity_bounds_all <- map_dfr(SENSE_TREAT_TERMS, function(treatment_term) {
-  map_dfr(seq_along(pv_lit), benchmark_bounds_pv, treatment_term = treatment_term)
+sensitivity_bounds_all <- map_dfr(SENSE_TREAT_TERMS, function(tt) {
+  map_dfr(seq_along(pv_lit), benchmark_bounds_pv, treatment_term = tt)
 })
 
 sensitivity_bounds_pooled <- pool_scalar_df(
@@ -738,23 +780,62 @@ sensitivity_bounds_pooled <- pool_scalar_df(
   n_used       = cc_n
 )
 
-## (3) 강건성 값(RV): 통합된 계수·표준오차·자유도에 기초해 산출 ---------------
 
-sensitivity_rv_pooled <- main_effect_results %>%
-  mutate(
-    sensitivity_stats = pmap(
-      list(estimate = estimate, se = std_error, dof = df, treatment = term),
-      function(estimate, se, dof, treatment) {
-        sensemakr::sensitivity_stats(
-          estimate = estimate, se = se, dof = dof,
-          treatment = treatment, q = 1, alpha = SENSE_ALPHA
-        )
-      }
-    ),
-    RV         = map_dbl(sensitivity_stats, ~ as.numeric(.x$rv_q[1])),
-    RV_extreme = map_dbl(sensitivity_stats, ~ as.numeric(.x$rv_qa[1]))
-  ) %>%
-  select(treatment = term, `도서 보유 수`, RV, RV_extreme)
+## (3) 강건성 값 RV(α)와 XRV(α) -----------------------------------------------
+##     RV(α)  : 미관측 교란요인이 원인변수와 결과변수의 잔여 변량을 각각 얼마나
+##              설명해야 유의수준 α에서 유의성이 사라지는가
+##     XRV(α) : 교란요인이 결과변수의 잔여 변량을 전부(100%) 설명한다고 가정할 때,
+##              원인변수 쪽으로 얼마나 설명해야 같은 결과가 되는가
+##     설계효과로 보정한 유효 자유도를 사용한다(USE_DEFF = TRUE).
+
+USE_DEFF <- TRUE   # FALSE이면 가중 lm의 t와 잔차 자유도를 그대로 사용
+
+rv_pv <- map_dfr(SENSE_TREAT_TERMS, function(tt) {
+  map_dfr(seq_along(pv_lit), function(i) {
+    m       <- lm_model_list[[i]]
+    tab_lm  <- coef(summary(m))
+    tab_brr <- coef(summary(main_model_list[[i]]))
+    
+    est     <- tab_lm[tt, "Estimate"]
+    se_wls  <- tab_lm[tt, "Std. Error"]
+    dof_wls <- m$df.residual
+    se_brr  <- tab_brr[tt, "Std. Error"]
+    
+    deff    <- (se_brr / se_wls)^2
+    
+    if (USE_DEFF) {
+      t_use   <- est / se_brr          # 설계 기반 t
+      dof_use <- dof_wls / deff        # 유효 자유도
+    } else {
+      t_use   <- est / se_wls
+      dof_use <- dof_wls
+    }
+    
+    tibble(
+      treatment = tt, pv = pv_lit[i],
+      deff = deff, dof_use = dof_use,
+      RV  = as.numeric(sensemakr::robustness_value(
+        t_statistic = t_use, dof = dof_use, q = 1, alpha = SENSE_ALPHA)),
+      XRV = as.numeric(sensemakr::extreme_robustness_value(
+        t_statistic = t_use, dof = dof_use, q = 1, alpha = SENSE_ALPHA))
+    )
+  })
+})
+
+sensitivity_rv_pooled <- rv_pv %>%
+  group_by(treatment) %>%
+  summarise(deff = mean(deff), dof_use = mean(dof_use),
+            RV = mean(RV), XRV = mean(XRV), .groups = "drop") %>%
+  mutate(`도서 보유 수` = factor(str_remove(treatment, "^book_f"),
+                            levels = setdiff(book_levels, book_ref))) %>%
+  arrange(`도서 보유 수`) %>%
+  select(treatment, `도서 보유 수`, deff, dof_use, RV, XRV)
+
+cat("\n[설계효과 및 유효 자유도]\n")
+print(sensitivity_rv_pooled %>%
+        transmute(`도서 보유 수`, deff = round(deff, 3), dof = round(dof_use)),
+      n = Inf)
+
 
 ## (4) 표 조립 ----------------------------------------------------------------
 
@@ -762,23 +843,21 @@ sensitivity_rv_pooled <- main_effect_results %>%
   mutate(
     scenario = factor(scenario, levels = scenario_levels),
     조정치   = paste0(fmt_num(estimate, 2), stars_from_p(p_value),
-                      "(", fmt_num(std_error, 2), ")")
+                   "(", fmt_num(std_error, 2), ")")
   ) %>%
   select(treatment, scenario, 조정치) %>%
-  pivot_wider(
-    names_from  = scenario,
-    values_from = 조정치,
-    names_glue  = "{scenario} 조정치(SE)"
-  )
+  pivot_wider(names_from = scenario, values_from = 조정치,
+              names_glue = "{scenario} 조정치(SE)")
 
 표3_민감도분석 <- sensitivity_rv_pooled %>%
   left_join(표3_벤치마크, by = "treatment") %>%
   mutate(
-    `도서 보유 수` = as.character(`도서 보유 수`),
-    RV             = fmt_num(RV, 3),
-    `극단적 RV`    = fmt_num(RV_extreme, 3)
+    `도서 보유 수`   = as.character(`도서 보유 수`),
+    `RV(α = .05)`    = fmt_dec(RV, 3),
+    `XRV(α = .05)`   = fmt_dec(XRV, 3)
   ) %>%
-  select(`도서 보유 수`, RV, `극단적 RV`, ends_with("조정치(SE)"))
+  select(`도서 보유 수`, `RV(α = .05)`, `XRV(α = .05)`, ends_with("조정치(SE)"))
+
 
 show_table(
   표3_민감도분석,
@@ -799,7 +878,7 @@ show_note(
   fmt_dec(r2_y_benchmark, 3), ", 원인변수에 대해 범주별로 ",
   fmt_dec(min(r2_d_benchmark), 3), "-", fmt_dec(max(r2_d_benchmark), 3), "였다. ",
   "RV와 극단적 RV, 조정 추정치와 조정 표준오차는 10개 문해력 PV와 복합표본 설계를 ",
-  "반영하여 추정한 뒤 Rubin의 결합규칙에 따라 통합하였다. ***p < .001."
+  "반영하여 추정한 뒤 Rubin의 결합규칙에 따라 통합하였다."
 )
 
 
