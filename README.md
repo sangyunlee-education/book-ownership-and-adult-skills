@@ -129,15 +129,6 @@ prgkorp2.csv
 .Rhistory
 ```
 
-## 10. 인용
-
-이 코드를 사용하는 경우 다음과 같이 인용한다.
-
-```text
-이상윤. 청소년기 가정 내 도서 보유 수가 성인기 문해력에 미치는 영향: PIAAC 2주기 한국 자료를 활용한 분석.
-분석 코드: https://github.com/sangyunlee-education/book-ownership-and-adult-skills
-```
-
-## 11. 라이선스
+## 10. 라이선스
 
 이 저장소의 코드는 MIT License를 따른다. 자세한 내용은 `LICENSE` 파일을 참조한다. 라이선스는 코드에만 적용되며, PIAAC 원자료에는 OECD의 이용 조건이 적용된다.
