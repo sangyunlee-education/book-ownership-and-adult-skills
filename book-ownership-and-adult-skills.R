@@ -2,7 +2,6 @@
 # 청소년기 가정 내 도서 보유 수가 성인기 문해력에 미치는 영향
 # PIAAC 2주기 한국 자료 분석 코드
 #
-# Repository : https://github.com/sangyunlee-education/book-ownership-and-adult-skills
 # Data       : PIAAC Cycle 2 Korea public use file (prgkorp2.csv, OECD)
 #              자료는 저장소에 포함하지 않았다. OECD에서 내려받아
 #              이 스크립트와 같은 폴더에 두면 그대로 실행된다.
