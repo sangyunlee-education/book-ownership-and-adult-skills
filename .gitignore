@@ -6,9 +6,13 @@ prgkorp2.csv
 *.dta
 *.xlsx
 
-# R 세션 파일
+# 분석 결과표는 예외
+!output/*.csv
+
+# R 세션 및 프로젝트 파일
 .Rhistory
 .RData
+.Rproj.user/
 .Ruserdata
 
 # 임시 파일
