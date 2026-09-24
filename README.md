@@ -11,8 +11,6 @@
 - `.gitignore`: 원자료 및 임시 파일 제외 설정
 - `book-ownership-and-adult-skills.R`: 분석 코드
 
-정리된 코드 파일 `piaac_sensitivity_clean.R`은 저장소에 올릴 때 `book-ownership-and-adult-skills.R`로 이름을 변경한다.
-
 ## 2. 분석 자료
 
 본 연구는 OECD 국제성인역량조사(PIAAC) 2주기 한국 Public Use File을 사용하였다. 원자료는 이 저장소에 포함하지 않는다.
