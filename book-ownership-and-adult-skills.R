@@ -1,44 +1,11 @@
-# ==============================================================================
-# 청소년기 가정 내 도서 보유 수가 성인기 문해력에 미치는 영향
-# PIAAC 2주기 한국 자료 분석 코드
-#
-# Data : PIAAC Cycle 2 Korea public use file (prgkorp2.csv, OECD)
-#        자료는 저장소에 포함하지 않았다. OECD에서 내려받아 이 스크립트와
-#        같은 폴더에 두면 그대로 실행된다.
-#        배포본에 따라 구분자가 세미콜론(;), 쉼표(,), 탭인 경우가 있어
-#        첫 줄에서 자동으로 판별한다.
-#
-# 산출물
-#   표 1. 도서 보유 수 범주별 배경변수의 가중 분포 및 교차분석
-#   표 2. 도서 보유 수와 성인기 문해력의 회귀분석(효과크기 포함)
-#   표 3. 미관측 교란요인에 대한 민감도 분석
-#
-# 분석 원칙
-#   - 결과변수는 문해력 유의측정값(PVLIT1-PVLIT10)이다.
-#   - 최종가중치(SPFWT0)와 80개 반복가중치(SPFWT1-SPFWT80)를 적용한다.
-#   - 분산 추정은 Fay의 균형반복복제법(BRR)이며 rho = 0.3이다.
-#   - PV별 복합표본 추정치는 Rubin의 결합규칙으로 통합한다.
-#
-# 구성
-#   0 실행 옵션      1 패키지        2 분석 설정      3 유틸리티 함수
-#   4 결합규칙 함수  5 자료 전처리   6 모형 적합      7 표 1
-#   8 표 2           9 표 3          10 재현 정보
-# ==============================================================================
-
-
-# ==============================================================================
 # 0. 실행 옵션
-# ==============================================================================
 
 DATA_PATH   <- "prgkorp2.csv"
-USE_VIEWER  <- interactive()   # RStudio 표 창 자동 실행 여부
-SAVE_OUTPUT <- FALSE           # TRUE이면 표를 CSV로 저장
+USE_VIEWER  <- interactive()
+SAVE_OUTPUT <- FALSE
 OUTPUT_DIR  <- "output"
 
-
-# ==============================================================================
 # 1. 패키지
-# ==============================================================================
 
 packages <- c("tidyverse", "survey", "sensemakr")
 
@@ -47,28 +14,21 @@ if (length(to_install) > 0) install.packages(to_install, dependencies = TRUE)
 
 invisible(lapply(packages, library, character.only = TRUE))
 
-
-# ==============================================================================
 # 2. 분석 설정
-# ==============================================================================
 
-## (1) 가중치 및 결과변수 -----------------------------------------------------
+pv_lit      <- paste0("PVLIT", 1:10)
+main_weight <- "SPFWT0"
+rep_weights <- paste0("SPFWT", 1:80)
+fay_rho     <- 0.3
 
-pv_lit      <- paste0("PVLIT", 1:10)   # 문해력 유의측정값
-main_weight <- "SPFWT0"                # 최종가중치
-rep_weights <- paste0("SPFWT", 1:80)   # 반복가중치
-fay_rho     <- 0.3                     # Fay 조정계수
-
-## (2) 원인변수 및 통제변수 ---------------------------------------------------
-
-book_var <- "J2_Q06"      # 14세 시점 가정 내 도서 보유 수
-age_var  <- "AGEG5LFS"    # 연령 범주
+book_var <- "J2_Q06"
+age_var  <- "AGEG5LFS"
 
 book_levels <- c(
   "10권 이하", "11-25권", "26-100권",
   "101-200권", "201-500권", "500권 초과"
 )
-book_ref <- "10권 이하"   # 기준집단
+book_ref <- "10권 이하"
 
 book_col_labels <- c(
   "10권 이하"  = "≤10",
@@ -80,46 +40,37 @@ book_col_labels <- c(
 )
 
 control_vars <- c(
-  "gender_f",       # 성별
-  "age_f",          # 연령
-  "parent_edu_f",   # 부모 교육수준
-  "mother_work_f",  # 14세 당시 모 경제활동
-  "father_work_f",  # 14세 당시 부 경제활동
-  "residence_f",    # 14세 당시 거주지역 규모
-  "family14_f"      # 14세 당시 가족구조
+  "gender_f",
+  "age_f",
+  "parent_edu_f",
+  "mother_work_f",
+  "father_work_f",
+  "residence_f",
+  "family14_f"
 )
 
-## (3) 민감도 분석 설정 -------------------------------------------------------
-
-# 기준집단(10권 이하)과 비교되는 모든 도서 보유 수 범주
 SENSE_TREAT_TERMS   <- paste0("book_f", setdiff(book_levels, book_ref))
-SENSE_BENCHMARK_COV <- "parent_edu_f대졸 이상"     # 비교기준 공변량
-SENSE_KD            <- c(1, 2, 3)                # 비교기준 공변량 대비 배수
-SENSE_ALPHA         <- 0.05                      # 강건성 판정 유의수준
+SENSE_BENCHMARK_COV <- "parent_edu_f대졸 이상"
+SENSE_KD            <- c(1, 2, 3)
+SENSE_ALPHA         <- 0.05
 
 scenario_levels <- paste0(SENSE_KD, "배")
 
-
-# ==============================================================================
-# 3. 유틸리티 함수
-# ==============================================================================
+# 3. 보조 함수
 
 as_code <- function(x) suppressWarnings(as.integer(as.character(x)))
 
-# 문자형 특수결측 처리
 recode_char_missing <- function(x) {
   if (is.character(x)) x[x %in% c(".", ".n", ".r", ".d", ".v", "", "NA")] <- NA_character_
   x
 }
 
-# 숫자형 특수결측(모름·무응답·비해당 등) 처리
 recode_numeric_special_missing <- function(x) {
   x_num <- as_code(x)
   x_num[x_num %in% c(7, 8, 9, 96, 97, 98, 99, 996, 997, 998, 999)] <- NA_integer_
   x_num
 }
 
-# Fay BRR 복합표본 설계
 make_design <- function(data) {
   survey::svrepdesign(
     weights          = as.formula(paste0("~", main_weight)),
@@ -131,18 +82,14 @@ make_design <- function(data) {
   )
 }
 
-# 회귀식: 문해력 PV ~ 도서 보유 수 + 통제변수
 make_reg_formula <- function(outcome, controls = control_vars) {
   as.formula(paste(outcome, "~ book_f +", paste(controls, collapse = " + ")))
 }
-
-## 출력 형식 ------------------------------------------------------------------
 
 fmt_num <- function(x, digits = 2) {
   ifelse(is.na(x), "", sprintf(paste0("%.", digits, "f"), x))
 }
 
-# 앞자리 0을 생략한 소수 표기(p, R² 등)
 fmt_dec <- function(x, digits = 3) {
   ifelse(is.na(x), "", sub("^0", "", sprintf(paste0("%.", digits, "f"), x)))
 }
@@ -180,17 +127,7 @@ show_table <- function(x, table_name, file_name = NULL) {
   invisible(x)
 }
 
-# 표 주석 출력(줄바꿈 정리)
-show_note <- function(...) {
-  cat("\n", paste(strwrap(paste0(...), width = 84), collapse = "\n"), "\n", sep = "")
-}
-
-
-# ==============================================================================
-# 4. Rubin 결합규칙
-# ==============================================================================
-
-## (1) svyglm 모형 목록(PV별)의 회귀계수 통합 ---------------------------------
+# 4. Rubin 결합
 
 pool_svyglm_models <- function(model_list, df_com, outcome_name = "문해력", n_used) {
 
@@ -207,11 +144,11 @@ pool_svyglm_models <- function(model_list, df_com, outcome_name = "문해력", n
   })
 
   k     <- length(model_list)
-  q_bar <- colMeans(coef_mat)                 # 결합 점추정치
-  u_bar <- Reduce("+", vcov_list) / k         # 표본내 분산
+  q_bar <- colMeans(coef_mat)
+  u_bar <- Reduce("+", vcov_list) / k
 
   if (k > 1) {
-    b_mat <- stats::cov(coef_mat)             # 표본간 분산
+    b_mat <- stats::cov(coef_mat)
     if (is.null(dim(b_mat))) {
       b_mat <- matrix(b_mat, nrow = 1, dimnames = list(coef_names, coef_names))
     }
@@ -249,9 +186,6 @@ pool_svyglm_models <- function(model_list, df_com, outcome_name = "문해력", n
     stars          = stars_from_p(p_value)
   )
 }
-
-## (2) 단일 추정치·표준오차 형태(민감도 분석 결과 등)의 통합 -------------------
-##     key_cols는 하나 이상 지정해야 한다.
 
 pool_scalar_df <- function(df, key_cols, estimate_col, se_col,
                            df_com, outcome_name = "문해력", n_used) {
@@ -293,12 +227,7 @@ pool_scalar_df <- function(df, key_cols, estimate_col, se_col,
     )
 }
 
-
-# ==============================================================================
 # 5. 자료 불러오기 및 전처리
-# ==============================================================================
-
-## (1) 구분자 자동 판별 후 읽기 -----------------------------------------------
 
 read_piaac <- function(path) {
   if (!file.exists(path)) {
@@ -335,8 +264,6 @@ cat(sprintf("[자료] %s행 %s열\n",
             format(nrow(dat_raw), big.mark = ","),
             format(ncol(dat_raw), big.mark = ",")))
 
-## (2) 필요한 변수 확인 -------------------------------------------------------
-
 required_raw_vars <- c(
   pv_lit, main_weight, rep_weights, book_var, age_var,
   "GENDER_R", "PAREDC2", "J2_Q04d", "J2_Q05d",
@@ -349,8 +276,6 @@ if (length(missing_raw_vars) > 0) {
        paste(missing_raw_vars, collapse = ", "))
 }
 
-## (3) 변수 생성 --------------------------------------------------------------
-
 special_numeric_vars <- c(
   book_var, "PAREDC2", "J2_Q04d", "J2_Q05d",
   "J2_Q07_C", "J2_Q0801", "J2_Q0802"
@@ -362,7 +287,6 @@ dat <- dat_raw %>%
   mutate(across(all_of(c(pv_lit, main_weight, rep_weights)),
                 ~ suppressWarnings(as.numeric(.x)))) %>%
   mutate(
-    # 14세 시점 가정 내 도서 보유 수(기준범주가 첫 수준)
     book_f = factor(
       case_when(
         as_code(.data[[book_var]]) == 1 ~ "10권 이하",
@@ -376,7 +300,6 @@ dat <- dat_raw %>%
       levels = book_levels
     ),
 
-    # 성별
     gender_f = factor(
       case_when(
         as_code(GENDER_R) == 1 ~ "남성",
@@ -386,7 +309,6 @@ dat <- dat_raw %>%
       levels = c("남성", "여성")
     ),
 
-    # 연령
     age_f = factor(
       case_when(
         as_code(.data[[age_var]]) == 1  ~ "20-24세",
@@ -405,7 +327,6 @@ dat <- dat_raw %>%
                  "45-49세", "50-54세", "55-59세", "60-64세", "65세 이상")
     ),
 
-    # 부모 교육수준(기준범주가 첫 수준)
     parent_edu_f = factor(
       case_when(
         as_code(PAREDC2) == 1 ~ "중졸 이하",
@@ -416,7 +337,6 @@ dat <- dat_raw %>%
       levels = c("중졸 이하", "고졸/전문대졸", "대졸 이상")
     ),
 
-    # 14세 당시 모 경제활동
     mother_work_f = factor(
       case_when(
         as_code(J2_Q04d) == 1 ~ "유급직",
@@ -426,7 +346,6 @@ dat <- dat_raw %>%
       levels = c("유급직", "무직/가사 등")
     ),
 
-    # 14세 당시 부 경제활동
     father_work_f = factor(
       case_when(
         as_code(J2_Q05d) == 1 ~ "유급직",
@@ -436,7 +355,6 @@ dat <- dat_raw %>%
       levels = c("유급직", "무직/가사 등")
     ),
 
-    # 14세 당시 거주지역 규모
     residence_f = factor(
       case_when(
         as_code(J2_Q07_C) == 1 ~ "대도시",
@@ -448,7 +366,6 @@ dat <- dat_raw %>%
       levels = c("대도시", "중소도시", "소도시/읍면", "농어촌/시골")
     ),
 
-    # 14세 당시 가족구조
     family14_f = factor(
       case_when(
         as_code(J2_Q0801) == 1 & as_code(J2_Q0802) == 1 ~ "양부모 동거",
@@ -461,8 +378,6 @@ dat <- dat_raw %>%
     )
   )
 
-## (4) 변수별 결측 점검 -------------------------------------------------------
-
 missing_by_var <- dat %>%
   select(all_of(c("book_f", control_vars, pv_lit))) %>%
   summarise(across(everything(), ~ sum(is.na(.x)))) %>%
@@ -473,8 +388,6 @@ missing_by_var <- dat %>%
 cat("\n[변수별 결측]\n")
 print(missing_by_var, n = Inf)
 
-## (5) 완전사례 자료 ----------------------------------------------------------
-
 cc_data <- dat %>%
   select(all_of(c(pv_lit, "book_f", control_vars, main_weight, rep_weights))) %>%
   tidyr::drop_na() %>%
@@ -482,7 +395,7 @@ cc_data <- dat %>%
   mutate(
     book_f       = relevel(book_f, ref = book_ref),
     parent_edu_f = relevel(parent_edu_f, ref = "중졸 이하"),
-    w_           = .data[[main_weight]]          # lm의 weights 인자용
+    w_           = .data[[main_weight]]
   )
 
 cc_n   <- nrow(cc_data)
@@ -497,19 +410,12 @@ cat(sprintf("  결측 제외        : %s명(%.2f%%)\n",
 cat(sprintf("  최종 분석 표본   : %s명\n", format(cc_n, big.mark = ",")))
 cat(sprintf("  복합표본 설계 자유도: %d\n", cc_df))
 
-
-# ==============================================================================
-# 6. 모형 적합 및 결합
-# ==============================================================================
-
-## (1) PV별 복합표본 회귀 ------------------------------------------------------
+# 6. 회귀모형 적합 및 결합
 
 main_model_list <- map(pv_lit, function(y) {
   survey::svyglm(make_reg_formula(y), design = cc_des)
 })
 names(main_model_list) <- pv_lit
-
-## (2) Rubin 결합 및 원인변수 계수 추출 ---------------------------------------
 
 main_pooled <- pool_svyglm_models(main_model_list, df_com = cc_df, n_used = cc_n)
 
@@ -519,9 +425,6 @@ main_effect_results <- main_pooled %>%
                             levels = setdiff(book_levels, book_ref))) %>%
   arrange(`도서 보유 수`)
 
-## (3) 문해력의 가중 표준편차(효과크기 환산 기준) -----------------------------
-##     PV별 가중 분산의 평균(Rubin 결합의 점추정치)에 제곱근을 취한다.
-
 pv_var_vec <- vapply(pv_lit, function(y) {
   as.numeric(survey::svyvar(as.formula(paste0("~", y)), design = cc_des))
 }, numeric(1))
@@ -530,10 +433,7 @@ sd_lit <- sqrt(mean(pv_var_vec))
 
 cat(sprintf("\n[문해력 가중 표준편차] %.2f점\n", sd_lit))
 
-
-# ==============================================================================
-# 7. 표 1. 도서 보유 수 범주별 배경변수의 가중 분포 및 교차분석
-# ==============================================================================
+# 7. 기술통계 및 교차분석
 
 background_specs <- list(
   list(var = "gender_f",      label = "성별",
@@ -553,14 +453,12 @@ background_specs <- list(
        levels = c("양부모 동거", "모만 동거", "부만 동거", "생부모 비동거"))
 )
 
-# 표 1의 한 행 만들기(값은 이미 문자형으로 정리된 벡터)
 make_row <- function(label, values_chr, p_text = "") {
   values <- as.list(values_chr[book_levels])
   names(values) <- unname(book_col_labels[book_levels])
   bind_cols(tibble(변수 = label), as_tibble(values), tibble(`pᵃ` = p_text))
 }
 
-# Rao-Scott 수정 카이제곱 검정(통계량 옵션을 순차적으로 시도)
 safe_svy_chisq_p <- function(var) {
   fml <- as.formula(paste("~ book_f +", var))
   for (method in c("F", "adjWald", "Chisq")) {
@@ -573,7 +471,6 @@ safe_svy_chisq_p <- function(var) {
   NA_real_
 }
 
-# 도서 보유 수 범주별 가중 열 백분율
 weighted_col_percent <- function(var, category) {
   tmp <- cc_data %>%
     filter(!is.na(book_f), !is.na(.data[[var]])) %>%
@@ -600,8 +497,6 @@ make_table1_section <- function(spec) {
   bind_rows(header, rows)
 }
 
-## (1) 범주별 사례수 및 가중 구성비 -------------------------------------------
-
 book_distribution <- cc_data %>%
   group_by(book_f) %>%
   summarise(n = n(), weighted_n = sum(.data[[main_weight]]), .groups = "drop") %>%
@@ -611,8 +506,6 @@ n_vec   <- setNames(as.character(book_distribution$n),
                     as.character(book_distribution$book_f))
 pct_vec <- setNames(fmt_num(book_distribution$pct, 1),
                     as.character(book_distribution$book_f))
-
-## (2) 표 조립 ----------------------------------------------------------------
 
 표1_기술통계_교차분석 <- bind_rows(
   make_row("n(비가중)", n_vec),
@@ -626,16 +519,7 @@ show_table(
   "table1.csv"
 )
 
-show_note(
-  "주. n(비가중)은 각 범주의 사례수, %(가중)은 최종가중치를 적용한 범주별 ",
-  "구성비이다. 배경변수의 수치는 복합표본 최종가중치를 적용한 열 백분율(%)이다. ",
-  "a Rao-Scott 수정 카이제곱 검정의 p값이다. ***p < .001."
-)
-
-
-# ==============================================================================
-# 8. 표 2. 도서 보유 수와 성인기 문해력의 회귀분석
-# ==============================================================================
+# 8. 회귀분석 결과
 
 표2_회귀분석 <- main_effect_results %>%
   transmute(
@@ -654,45 +538,17 @@ show_table(
   "table2.csv"
 )
 
-show_note(
-  sprintf("주. 표본 크기는 %s명이며, 기준집단은 '%s'이다. ",
-          format(cc_n, big.mark = ","), book_ref),
-  "모형은 성별, 연령, 부모 교육수준, 14세 당시 모·부의 경제활동 여부, ",
-  "거주지역 규모 및 가족구조를 통제하였다. 각 계수와 표준오차는 10개의 문해력 PV에 ",
-  sprintf("대해 최종가중치와 80개의 반복가중치, Fay 조정계수 %.1f을 적용한 BRR로 추정한 뒤 ",
-          fay_rho),
-  "Rubin의 결합규칙에 따라 통합하였다. ",
-  sprintf("효과크기(SD)는 각 추정치를 본 표본의 문해력 가중 표준편차(%.2f점)로 나눈 값이다. ",
-          sd_lit),
-  "***p < .001."
-)
-
-
-# ==============================================================================
-# 9. 표 3. 미관측 교란요인에 대한 민감도 분석
-# ==============================================================================
-
-# sensemakr는 lm 객체를 요구하므로 부분설명력과 편의 환산척도는
-# 최종가중치를 적용한 가중 선형회귀에서 산출한다. 통계적 불확실성은 Fay BRR과
-# Rubin의 결합규칙을 적용한 표준오차와 자유도를 통해 반영한다.
+# 9. 민감도 분석
 
 lm_model_list <- map(pv_lit, function(y) {
   stats::lm(make_reg_formula(y), data = cc_data, weights = w_)
 })
 names(lm_model_list) <- pv_lit
 
-## (1) 비교기준 공변량의 관찰된 부분설명력 ------------------------------------
-##     표 3 주석에 그대로 들어가는 값이므로 표보다 먼저 계산한다.
-
-# ① 결과변수 쪽: R²_{Y~Z | D, X}
 r2_y_benchmark <- mean(vapply(lm_model_list, function(m) {
   as.numeric(sensemakr::partial_r2(m, covariates = SENSE_BENCHMARK_COV))
 }, numeric(1)))
 
-# ② 원인변수 쪽: R²_{D~Z | X}
-#    sensemakr 내부와 동일하게, 해당 처치 더미를 결과로 두고 나머지 모든 회귀항
-#    (다른 도서 보유 수 더미 포함)을 설명변수로 하는 회귀를 적합한다.
-#    한글 변수명이 수식에서 문제가 되므로 임시 이름으로 치환한다.
 mm <- model.matrix(make_reg_formula(pv_lit[1]), data = cc_data)
 mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
 
@@ -721,259 +577,186 @@ show_table(
   "benchmark_r2.csv"
 )
 
-## (2) 비교기준 공변량 대비 배수 시나리오(bounds) -----------------------------
-##     편의 환산척도 se*sqrt(dof)는 가중 lm의 se와 잔차 자유도를 사용하고,
-##     조정 표준오차는 PV별 BRR 표준오차에 sensemakr의 조정 비율을 적용한다.
-##     이후 PV별 조정 추정치와 분산을 Rubin의 결합규칙으로 통합한다.
+sense_direction <- setNames(
+  ifelse(main_effect_results$estimate >= 0, 1, -1),
+  main_effect_results$term
+)
 
-benchmark_bounds_pv <- function(i, treatment_term) {
-  m       <- lm_model_list[[i]]
-  tab_lm  <- coef(summary(m))
-  tab_brr <- coef(summary(main_model_list[[i]]))
+make_sense_cache <- function(i, tt) {
+  message("민감도 반복추정: ", tt, " / ", pv_lit[i])
+  s <- sense_direction[[tt]]
 
-  if (!(treatment_term %in% rownames(tab_lm))) {
-    stop("벤치마크 분석 대상 계수가 모형에 없습니다: ", treatment_term)
-  }
+  survey::withReplicates(
+    design = cc_des,
+    theta = function(w, data) {
+      if (any(!is.finite(w)) || any(w < 0) || sum(w) <= 0) {
+        stop("분석할 수 없는 반복가중치입니다.")
+      }
+      data$w_ <- as.numeric(w)
+      m <- stats::lm(make_reg_formula(pv_lit[i]),
+                     data = data, weights = w_)
+      tab <- coef(summary(m))
+      required <- c(tt, SENSE_BENCHMARK_COV)
+      if (!all(required %in% rownames(tab)) || anyNA(coef(m))) {
+        stop("반복표본의 모형이 식별되지 않습니다: ", tt)
+      }
+      beta <- unname(tab[tt, "Estimate"])
+      bias_scale <- unname(tab[tt, "Std. Error"] * sqrt(m$df.residual))
+      ry <- as.numeric(sensemakr::partial_r2(
+        m, covariates = SENSE_BENCHMARK_COV
+      ))
 
-  est_lm  <- tab_lm[treatment_term, "Estimate"]
-  se_lm   <- tab_lm[treatment_term, "Std. Error"]
-  dof_lm  <- m$df.residual
-  se_brr  <- tab_brr[treatment_term, "Std. Error"]
+      ddata <- mm_df
+      ddata$w_ <- as.numeric(w)
+      y_nm <- name_map[[tt]]
+      x_nm <- setdiff(unname(name_map), y_nm)
+      md <- stats::lm(stats::reformulate(x_nm, response = y_nm),
+                      data = ddata, weights = w_)
+      if (anyNA(coef(md))) stop("원인변수 회귀의 반복표본 특이행렬")
+      rd <- as.numeric(sensemakr::partial_r2(
+        md, covariates = name_map[[SENSE_BENCHMARK_COV]]
+      ))
 
-  sense_out <- sensemakr::sensemakr(
-    model                = m,
-    treatment            = treatment_term,
-    benchmark_covariates = SENSE_BENCHMARK_COV,
-    kd                   = SENSE_KD,
-    ky                   = SENSE_KD,
-    q                    = 1,
-    alpha                = SENSE_ALPHA
+      adj <- vapply(SENSE_KD, function(k) {
+        b <- sensemakr::ovb_partial_r2_bound(
+          r2dxj.x = rd, r2yxj.dx = ry, kd = k, ky = k
+        )
+        r_d <- b$r2dz.x
+        r_y <- b$r2yz.dx
+        if (length(r_d) != 1L || length(r_y) != 1L ||
+            any(!is.finite(c(r_d, r_y))) ||
+            r_d < 0 || r_d >= 1 || r_y < 0 || r_y > 1) {
+          stop("비교기준 시나리오가 허용 범위를 벗어났습니다: ", tt)
+        }
+        beta - s * bias_scale * sqrt(r_y * r_d / (1 - r_d))
+      }, numeric(1))
+
+      out <- c(beta = beta, bias_scale = bias_scale,
+               setNames(adj, paste0("adj_", seq_along(SENSE_KD))))
+      if (any(!is.finite(out))) stop("민감도 계산에 비유한 값이 있습니다.")
+      out
+    },
+    return.replicates = TRUE
   )
-
-  bounds <- as_tibble(sense_out$bounds)
-  stopifnot(nrow(bounds) == length(SENSE_KD))
-
-  bounds %>%
-    mutate(
-      treatment = treatment_term,
-      pv        = pv_lit[i],
-      scenario  = scenario_levels,
-      Adjusted_Estimate = sensemakr::adjusted_estimate(
-        estimate = est_lm, se = se_lm, dof = dof_lm,
-        r2dz.x = r2dz.x, r2yz.dx = r2yz.dx
-      ),
-      Adjusted_SE = sensemakr::adjusted_se(
-        se = se_brr,
-        dof = dof_lm,
-        r2dz.x = r2dz.x,
-        r2yz.dx = r2yz.dx
-      )
-    ) %>%
-    select(treatment, pv, scenario, r2dz.x, r2yz.dx, Adjusted_Estimate, Adjusted_SE)
 }
 
-sensitivity_bounds_all <- map_dfr(SENSE_TREAT_TERMS, function(tt) {
-  map_dfr(seq_along(pv_lit), benchmark_bounds_pv, treatment_term = tt)
-})
+sense_cache <- setNames(lapply(SENSE_TREAT_TERMS, function(tt) {
+  lapply(seq_along(pv_lit), function(i) make_sense_cache(i, tt))
+}), SENSE_TREAT_TERMS)
 
-sensitivity_bounds_pooled <- pool_scalar_df(
-  df           = sensitivity_bounds_all,
-  key_cols     = c("treatment", "scenario"),
-  estimate_col = "Adjusted_Estimate",
-  se_col       = "Adjusted_SE",
-  df_com       = cc_df,
-  n_used       = cc_n
-)
-
-
-## (3) 설계·PV 결합을 반영한 RV와 극단적 RV ----------------------------------
-##     sensemakr의 부분 R² 모수화에 필요한 회귀 기하량과 BRR·Rubin 결합
-##     추론에 필요한 표준오차·자유도를 분리한다. bias_scale은
-##     SE_WLS*sqrt(df_WLS)로, 미관측 교란의 부분 R²를 회귀계수 편의로 환산한다.
-
-rv_geometry_pv <- map_dfr(SENSE_TREAT_TERMS, function(tt) {
-
-  map_dfr(seq_along(pv_lit), function(i) {
-
-    m   <- lm_model_list[[i]]
-    tab <- coef(summary(m))
-
-    tibble(
-      treatment  = tt,
-      pv         = pv_lit[i],
-      bias_scale = tab[tt, "Std. Error"] * sqrt(m$df.residual),
-      dof_geom   = m$df.residual
-    )
+pool_sense <- function(tt, f = 0, j = NULL) {
+  s <- sense_direction[[tt]]
+  pv_rows <- lapply(seq_along(pv_lit), function(i) {
+    obj <- sense_cache[[tt]][[i]]
+    z <- coef(obj)
+    reps <- as.matrix(obj$replicates)
+    if (ncol(reps) != length(z)) stop("반복추정치 열 수 불일치")
+    colnames(reps) <- names(z)
+    if (is.null(j)) {
+      q <- unname(z["beta"] - s * f * z["bias_scale"])
+      qr <- reps[, "beta"] - s * f * reps[, "bias_scale"]
+    } else {
+      nm <- paste0("adj_", j)
+      q <- unname(z[nm])
+      qr <- reps[, nm]
+    }
+    if (!is.finite(q) || any(!is.finite(qr))) {
+      stop("반복추정치가 누락되었습니다: ", tt)
+    }
+    u <- as.numeric(survey::svrVar(
+      thetas = qr, scale = cc_des$scale, rscales = cc_des$rscales,
+      mse = cc_des$mse, coef = q
+    ))
+    if (!is.finite(u) || u < 0) stop("유효하지 않은 반복분산")
+    tibble(treatment = tt, pv = pv_lit[i], est = q, se = sqrt(u))
   })
-})
-
-## 공통 부분 R² 시나리오에서 PV별 조정계수를 평균내면
-## 편향 환산척도 역시 PV 간 평균으로 결합된다.
-
-rv_geometry_pooled <- rv_geometry_pv %>%
-  group_by(treatment) %>%
-  summarise(
-    bias_scale = mean(bias_scale),
-    dof_geom   = mean(dof_geom),
-    .groups    = "drop"
+  ans <- pool_scalar_df(
+    df = bind_rows(pv_rows), key_cols = "treatment",
+    estimate_col = "est", se_col = "se",
+    df_com = cc_df, n_used = cc_n
   )
+  crit <- qt(1 - SENSE_ALPHA / 2, df = ans$df)
+  ans$conf_low <- ans$estimate - crit * ans$std_error
+  ans$conf_high <- ans$estimate + crit * ans$std_error
+  ans
+}
 
-## BRR 표본내분산과 PV 간 분산이 이미 결합된 표 2 결과에
-## 회귀 기하량을 결합한다.
+for (tt in SENSE_TREAT_TERMS) {
+  z <- pool_sense(tt, f = 0)
+  ref <- main_effect_results[main_effect_results$term == tt, ]
+  if (nrow(ref) != 1L ||
+      !isTRUE(all.equal(z$estimate, ref$estimate, tolerance = 1e-6)) ||
+      !isTRUE(all.equal(z$std_error, ref$std_error, tolerance = 1e-6))) {
+    stop("교란 0 재현 점검 실패: ", tt,
+         ". 자료 순서와 설계 설정을 확인하세요.")
+  }
+}
+message("교란 0에서 원래 회귀분석 재현: 통과")
 
-sensitivity_rv_pooled <- main_effect_results %>%
-  transmute(
-    treatment       = term,
-    `도서 보유 수` = as.character(`도서 보유 수`),
-    estimate         = estimate,
-    std_error        = std_error,
-    t_pooled         = statistic,
-    df_pooled        = df
-  ) %>%
-  left_join(rv_geometry_pooled, by = "treatment") %>%
-  mutate(
-    ## 미관측 교란 하나를 추가하면 잔차 자유도가 1 감소한다.
-    df_test = pmax(df_pooled - 1, 1),
+sensitivity_bounds_pooled <- bind_rows(lapply(SENSE_TREAT_TERMS, function(tt) {
+  bind_rows(lapply(seq_along(SENSE_KD), function(j) {
+    z <- pool_sense(tt, j = j)
+    z$scenario <- scenario_levels[j]
+    z
+  }))
+}))
 
-    ## BRR·Rubin 결합 추론의 임계값
-    t_critical = qt(
-      1 - SENSE_ALPHA / 2,
-      df = df_test
-    ),
+find_sense_threshold <- function(tt) {
+  s <- sense_direction[[tt]]
+  margin <- function(f) {
+    z <- pool_sense(tt, f = f)
+    s * z$estimate - qt(1 - SENSE_ALPHA / 2, z$df) * z$std_error
+  }
+  if (margin(0) <= 0) return(0)
+  z0 <- pool_sense(tt, f = 0)
+  mean_scale <- mean(vapply(sense_cache[[tt]], function(x) {
+    unname(coef(x)["bias_scale"])
+  }, numeric(1)))
+  if (!is.finite(mean_scale) || mean_scale <= 0) stop("편향 척도 오류")
+  f_zero <- abs(z0$estimate) / mean_scale
+  grid <- seq(0, f_zero * (1 + 1e-8), length.out = 257)
+  vals <- vapply(grid, margin, numeric(1))
+  hit <- which(vals <= 0)[1]
+  if (is.na(hit)) stop("신뢰구간 임계값을 찾지 못했습니다: ", tt)
+  uniroot(margin, interval = grid[c(hit - 1L, hit)], tol = 1e-8)$root
+}
 
-    ## q = 1: 추정효과를 100% 감소시키는 편향 크기
-    fq = abs(estimate) / bias_scale,
-
-    ## 통계적 유의성을 제거하는 데 필요한 임계 편향
-    ##
-    ## sqrt(dof_geom / (dof_geom - 1))은 미관측 변수 하나가
-    ## 모형에 추가될 때의 잔차 자유도 변화를 반영한다.
-    f_critical =
-      t_critical *
-      std_error *
-      sqrt(dof_geom / (dof_geom - 1)) /
-      bias_scale,
-
-    f_difference = pmax(fq - f_critical, 0),
-
-    ## 원인변수·결과변수 부분 R²를 동일하게 둔 RV(α)
-    RV = if_else(
-      f_difference <= 0,
-      0,
-      2 / (
-        1 + sqrt(
-          1 + 4 / (f_difference^2)
-        )
-      )
-    ),
-
-    ## 결과변수 쪽 관련성을 극단적으로 허용한 XRV(α)
-    XRV = pmax(
-      (fq^2 - f_critical^2) / (1 + fq^2),
-      0
-    )
-  ) %>%
-  select(
-    treatment,
-    `도서 보유 수`,
-    estimate,
-    std_error,
-    t_pooled,
-    df_pooled,
-    bias_scale,
-    RV,
-    XRV
+sensitivity_thresholds <- bind_rows(lapply(SENSE_TREAT_TERMS, function(tt) {
+  f_star <- find_sense_threshold(tt)
+  tibble(
+    treatment = tt,
+    r_equal_ci = if (f_star == 0) 0 else
+      2 / (1 + sqrt(1 + 4 / f_star^2)),
+    r_d_ci_y1 = f_star^2 / (1 + f_star^2)
   )
-
-cat("\n[설계·PV 결합 강건성 값]\n")
-
-print(
-  sensitivity_rv_pooled %>%
-    transmute(
-      `도서 보유 수`,
-      추정치          = round(estimate, 3),
-      표준오차        = round(std_error, 3),
-      t               = round(t_pooled, 3),
-      `결합 자유도`   = round(df_pooled, 1),
-      `편향 환산척도` = round(bias_scale, 3),
-      `RV(α = .05)`   = round(RV, 3),
-      `XRV(α = .05)`  = round(XRV, 3)
-    ),
-  n = Inf
-)
-
-## (4) 표 조립 ----------------------------------------------------------------
+}))
 
 표3_벤치마크 <- sensitivity_bounds_pooled %>%
   mutate(
     scenario = factor(scenario, levels = scenario_levels),
-    조정치   = paste0(fmt_num(estimate, 2), stars_from_p(p_value),
-                   "(", fmt_num(std_error, 2), ")")
+    조정치 = paste0(fmt_num(estimate, 2), stars_from_p(p_value),
+                   " (", fmt_num(std_error, 2), ")")
   ) %>%
   select(treatment, scenario, 조정치) %>%
   pivot_wider(names_from = scenario, values_from = 조정치,
               names_glue = "{scenario} 조정치(SE)")
 
-표3_민감도분석 <- sensitivity_rv_pooled %>%
+표3_민감도분석 <- sensitivity_thresholds %>%
   left_join(표3_벤치마크, by = "treatment") %>%
-  mutate(
-    `도서 보유 수` = as.character(`도서 보유 수`),
-    `RV(α = .05)`  = fmt_dec(RV, 3),
-    `XRV(α = .05)` = fmt_dec(XRV, 3)
-  ) %>%
-  select(
-    `도서 보유 수`,
-    `RV(α = .05)`,
-    `XRV(α = .05)`,
-    ends_with("조정치(SE)")
+  transmute(
+    `도서 보유 수` = str_remove(treatment, "^book_f"),
+    `동일 부분R2 CI 임계값` = fmt_dec(r_equal_ci, 3),
+    `rY=1일 때 rD CI 임계값` = fmt_dec(r_d_ci_y1, 3),
+    across(ends_with("조정치(SE)"))
   )
 
+show_table(표3_민감도분석,
+           "<표 3> 민감도 조정 통계량의 반복추정 결과", "table3.csv")
 
-show_table(
-  표3_민감도분석,
-  "<표 3> 미관측 교란요인에 대한 도서 보유 수 효과의 민감도 분석",
-  "table3.csv"
-)
-
-show_note(
-  sprintf("주. 기준집단은 '%s'이다. ", book_ref),
-
-  sprintf("RV는 미관측 교란요인이 원인변수와 결과변수의 잔여 변량을 같은 정도로 설명한다고 ",
-          "가정할 때, 유의수준 %s에서 추정효과의 통계적 유의성을 제거하는 데 필요한 최소 ",
-          "부분설명력이다. ", fmt_dec(SENSE_ALPHA, 2)),
-
-  "극단적 RV는 미관측 교란요인이 결과변수의 잔여 변량을 극단적으로 설명할 수 있다고 가정할 때, ",
-  "통계적 유의성을 제거하기 위해 원인변수의 잔여 변량을 설명해야 하는 최소 부분설명력이다. ",
-  "RV와 극단적 RV는 Cinelli와 Hazlett(2020)의 부분설명력 모수화에 기초하여 산출하였다. ",
-  "미관측 교란편의의 크기는 최종가중치를 적용한 가중 선형회귀의 잔차 기하량을 이용하여 환산하였으며, ",
-  "통계적 유의성 판단에는 각 PV의 Fay BRR 분산을 Rubin의 결합규칙으로 통합하여 얻은 표준오차와 ",
-  "Barnard-Rubin 자유도를 적용하였다. ",
-
-  "1배, 2배 및 3배 시나리오는 가상의 미관측 교란요인이 비교기준 공변량인 ",
-  "'부모 교육수준: 대졸 이상'보다 원인변수 및 결과변수와 각각 1배, 2배 및 ",
-  "3배 강하게 관련되는 경우를 나타낸다. ",
-
-  "이 공변량의 관찰된 부분설명력은 결과변수에 대해 R2 = ",
-  fmt_dec(r2_y_benchmark, 3),
-  ", 원인변수에 대해 범주별로 ",
-  fmt_dec(min(r2_d_benchmark), 3),
-  "-",
-  fmt_dec(max(r2_d_benchmark), 3),
-  "였다. 괄호 안은 조정 표준오차이다. ",
-  "*p < .05, **p < .01, ***p < .001."
-)
-
-
-# ==============================================================================
-# 10. 재현 정보
-# ==============================================================================
+# 10. 실행 환경
 
 cat("\n[재현 정보]\n")
 cat("  ", R.version.string, "\n", sep = "")
 for (pkg in packages) {
   cat(sprintf("   %-12s %s\n", pkg, as.character(packageVersion(pkg))))
 }
-
-# ==============================================================================
-# 끝
-# ==============================================================================
